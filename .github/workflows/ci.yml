@@ -34,7 +34,7 @@ jobs:
     name: Build & Push Docker image (ghcr.io + ACR)
     # Deployment is gated until quant-infrastructure has
     # QUANT_PORTFOLIO_IMAGE_TAG and the compose service points at this image.
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.ENABLE_QUANT_PORTFOLIO_DEPLOY == '1'
+    if: github.ref == 'refs/heads/main' && vars.ENABLE_QUANT_PORTFOLIO_DEPLOY == '1' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -88,7 +88,7 @@ jobs:
 
   bump:
     name: Bump image tag in quant-infrastructure & trigger deploy
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.ENABLE_QUANT_PORTFOLIO_DEPLOY == '1'
+    if: github.ref == 'refs/heads/main' && vars.ENABLE_QUANT_PORTFOLIO_DEPLOY == '1' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 120
     needs: [docker]
