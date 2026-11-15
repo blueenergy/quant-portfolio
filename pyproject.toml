@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quant-portfolio"
+version = "0.1.0"
+description = "Portfolio planning, paper trading, and trailing-stop service"
+requires-python = ">=3.11"
+dependencies = [
+  "pandas>=2.0.0",
+  "numpy>=1.24.0",
+  "pymongo>=4.5",
+  "python-dotenv>=1.0.0",
+  "pyyaml>=5.4",
+  "tushare>=1.4.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "mongomock>=4.1"]
+
+[tool.setuptools]
+packages = ["observability", "portfolio", "portfolio.plans", "shared", "utils"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

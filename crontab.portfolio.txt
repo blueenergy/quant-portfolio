@@ -1,0 +1,23 @@
+# quant-portfolio - portfolio planning and paper-trading cron schedule
+
+# Auto plan-generation trigger - 19:30 (weekdays only), after scoring completes.
+# Enqueues one auto-mode generation task per subscribed (strategy, params, user)
+# combo. The plan generation worker then decides monitor vs rebalance based on
+# rebalance_days. This is what keeps the rebalance cadence running automatically.
+30 19 * * 1-5 cd /app && python tools/enqueue_auto_plan_generation.py
+
+# Trailing-stop monitor enqueue - 19:40 (weekdays only), after scoring and auto plan enqueue.
+# Consumed by the trailing-stop loop in start.portfolio.sh.
+40 19 * * 1-5 cd /app && python tools/enqueue_trailing_stop_monitor.py
+
+# Process user-requested paper-trading plan generation tasks.
+# Runs as a quiet background loop from start.portfolio.sh to avoid Supercronic
+# info logs on every empty poll.
+
+# Optional approved paper-trading executor.
+# Runs during the opening window; approved plans remain approved until open prices are available.
+*/2 9-10 * * 1-5 cd /app && python tools/apply_approved_paper_plans.py --execute-date $(date +\%Y\%m\%d)
+
+# Daily paper-trading mark-to-market after EOD market data sync.
+# Writes a daily equity point even on non-rebalance days.
+50 18 * * 1-5 cd /app && python tools/mark_paper_equity.py --as-of-date $(date +\%Y\%m\%d)

@@ -1,0 +1,8 @@
+# Runtime dependencies for the quant-portfolio image.
+# data-access-lib is installed separately from the git submodule.
+pandas>=2.0.0
+numpy>=1.24.0
+pymongo>=4.5
+python-dotenv>=1.0.0
+pyyaml>=5.4
+tushare>=1.4.0
