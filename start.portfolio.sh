@@ -11,6 +11,15 @@ if [ "${PORTFOLIO_REQUIRE_TUSHARE_TOKEN:-true}" = "true" ] && [ -z "${TUSHARE_TO
   exit 1
 fi
 
+# The token alone is not enough: tushare also needs its runtime imports to work
+# (six is an undeclared dependency of tushare 1.4.x). Fail loudly at startup
+# instead of silently falling back to local history and failing plan generation.
+if ! python -c "import tushare" >/dev/null 2>&1; then
+  echo "[quant-portfolio] ERROR: tushare is not importable in this image; trading-calendar lookups would silently fall back to local history." >&2
+  echo "[quant-portfolio] Check requirements-portfolio.txt / image dependencies." >&2
+  exit 1
+fi
+
 python /app/tools/run_portfolio_plan_generation_loop.py \
   --interval-seconds "${PORTFOLIO_PLAN_LOOP_INTERVAL_SECONDS:-2}" \
   --limit-per-iteration "${PORTFOLIO_PLAN_LOOP_LIMIT:-20}" &

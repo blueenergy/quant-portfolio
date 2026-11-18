@@ -57,6 +57,10 @@ def _tushare_pro():
 
         return ts.pro_api(token)
     except Exception:
+        # Never degrade silently: the local fallback only knows loaded history,
+        # which at plan-generation time (19:30) stops at today, so the caller
+        # fails with a misleading "No next trading date / check TUSHARE_TOKEN".
+        log.warning("tushare unavailable; using local history only", exc_info=True)
         return None
 
 

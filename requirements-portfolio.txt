@@ -6,3 +6,6 @@ pymongo>=4.5
 python-dotenv>=1.0.0
 pyyaml>=5.4
 tushare>=1.4.0
+# tushare's package __init__ unconditionally imports tushare.trader.trader,
+# which imports six; tushare 1.4.x does not declare six in its metadata.
+six>=1.16.0
