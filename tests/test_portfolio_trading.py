@@ -1457,6 +1457,94 @@ def test_process_portfolio_plan_generation_task_waits_for_running_scores():
     assert not cols.trade_plans.find_one({"user_id": "user-1", "strategy_template_id": "growth_cycle_index_enhanced"})
 
 
+def _waiting_task_fixture():
+    """A pending rebalance task whose scoring run is still in flight."""
+    from tools.workers.process_portfolio_plan_generation_tasks import process_one
+
+    app_db, data_db, cols = _setup_dbs()
+    app_db["scoring_runs"].docs.append(
+        {
+            "score_date": "20250106",
+            "universe_index": "csi1000",
+            "status": "running",
+            "updated_at": "20250106",
+        }
+    )
+    cols.plan_generation_tasks.docs.append(
+        {
+            "task_id": "task-1",
+            "status": "pending",
+            "strategy_template_id": "growth_cycle_index_enhanced",
+            "base_date": "20250106",
+            "mode": "rebalance",
+            "user_id": "user-1",
+            "force": False,
+            "attempts": 0,
+            "created_at": "20250106",
+        }
+    )
+    return process_one, app_db, data_db, cols
+
+
+def test_waiting_plan_task_is_not_reclaimed_until_the_backoff_elapses():
+    process_one, app_db, data_db, cols = _waiting_task_fixture()
+
+    first = process_one(cols, "worker-1", app_db=app_db, data_db=data_db)
+    assert first["status"] == "waiting_for_scores"
+    task = cols.plan_generation_tasks.find_one({"task_id": "task-1"})
+    assert task["attempts"] == 1
+    assert task["waiting_since"] is not None
+    assert task["next_attempt_at"] > task["waiting_since"]
+
+    # The waiting task must NOT be claimable again right away. The generation
+    # loop drains up to 20 tasks per pass and sleeps only afterwards, so a
+    # claimable waiting task was re-claimed ~8 times/second (4801 attempts over
+    # one 10 minute wait).
+    second = process_one(cols, "worker-1", app_db=app_db, data_db=data_db)
+    assert second is None
+    task = cols.plan_generation_tasks.find_one({"task_id": "task-1"})
+    assert task["attempts"] == 1
+    assert task["status"] == "waiting_for_scores"
+
+
+def test_waiting_plan_task_is_reclaimed_after_the_backoff_elapses():
+    process_one, app_db, data_db, cols = _waiting_task_fixture()
+
+    process_one(cols, "worker-1", app_db=app_db, data_db=data_db)
+    cols.plan_generation_tasks.update_one(
+        {"task_id": "task-1"},
+        {"$set": {"next_attempt_at": datetime.utcnow() - timedelta(seconds=1)}},
+    )
+
+    second = process_one(cols, "worker-1", app_db=app_db, data_db=data_db)
+    assert second["status"] == "waiting_for_scores"
+    task = cols.plan_generation_tasks.find_one({"task_id": "task-1"})
+    assert task["attempts"] == 2
+    # The waiting clock is not reset by a re-check, only the first wait stamps it.
+    assert task["waiting_since"] is not None
+
+
+def test_waiting_plan_task_fails_after_the_waiting_deadline():
+    process_one, app_db, data_db, cols = _waiting_task_fixture()
+
+    process_one(cols, "worker-1", app_db=app_db, data_db=data_db)
+    cols.plan_generation_tasks.update_one(
+        {"task_id": "task-1"},
+        {
+            "$set": {
+                "waiting_since": datetime.utcnow() - timedelta(minutes=46),
+                "next_attempt_at": datetime.utcnow() - timedelta(seconds=1),
+            }
+        },
+    )
+
+    result = process_one(cols, "worker-1", app_db=app_db, data_db=data_db)
+    assert result["status"] == "failed"
+    task = cols.plan_generation_tasks.find_one({"task_id": "task-1"})
+    assert task["status"] == "failed"
+    assert "did not complete" in task["error_message"]
+
+
 @pytest.mark.parametrize("scoring_status", ["failed", None])
 def test_process_portfolio_plan_generation_task_fails_without_completed_scores(scoring_status):
     from tools.workers.process_portfolio_plan_generation_tasks import process_one

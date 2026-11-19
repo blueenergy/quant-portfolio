@@ -202,6 +202,9 @@ def ensure_trading_indexes(collections: Optional[TradingCollections] = None) -> 
     cols.paper_equity.create_index([("user_id", ASCENDING), ("plan_id", ASCENDING), ("date", ASCENDING)], unique=True)
     cols.plan_generation_tasks.create_index([("task_id", ASCENDING)], unique=True)
     cols.plan_generation_tasks.create_index([("status", ASCENDING), ("created_at", ASCENDING)])
+    # Serves the waiting-task re-check filter (status + next_attempt_at) that
+    # keeps the generation loop from re-claiming a waiting task in a hot loop.
+    cols.plan_generation_tasks.create_index([("status", ASCENDING), ("next_attempt_at", ASCENDING), ("created_at", ASCENDING)])
     cols.plan_generation_tasks.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
     cols.operation_logs.create_index([("log_id", ASCENDING)], unique=True)
     cols.operation_logs.create_index([("plan_id", ASCENDING), ("created_at", DESCENDING)])

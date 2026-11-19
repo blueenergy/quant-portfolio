@@ -8,12 +8,28 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 from pymongo import ASCENDING, ReturnDocument
 
 log = logging.getLogger(__name__)
+
+# A task that cannot start yet goes back to ``waiting_for_scores`` instead of
+# failing, and the generation loop drains up to ``--limit-per-iteration`` tasks
+# per pass while sleeping only *after* the drain. Claiming waiting tasks without
+# a backoff therefore re-claimed the same task ~8 times/second (4801 attempts
+# over one 10 minute wait), hammering a single document with Mongo writes.
+# Re-check on a backoff instead: the state lives on the task, so it survives a
+# worker restart.
+WAITING_RECHECK_BACKOFF_SECONDS = 30
+
+# Scoring runs finish in 13-18 minutes historically (worst observed 17m45s), and
+# all six universes are marked completed together, so a single universe can never
+# finish early. 45 minutes is ~2.5x the worst observed: long enough not to fire
+# on a slow day, short enough that a scoring run stuck in "running" fails the
+# task loudly (and reaches the Feishu alert) instead of hanging forever.
+WAITING_MAX_SECONDS = 45 * 60
 
 
 def _parse_args() -> argparse.Namespace:
@@ -29,7 +45,20 @@ def _parse_args() -> argparse.Namespace:
 def _claim_task(collections, worker_id: str):
     now = datetime.utcnow()
     return collections.plan_generation_tasks.find_one_and_update(
-        {"status": {"$in": ["pending", "waiting_for_scores"]}},
+        {
+            "$or": [
+                {"status": "pending"},
+                {
+                    "status": "waiting_for_scores",
+                    "$or": [
+                        # Tasks written before the backoff existed have no
+                        # next_attempt_at; claim them once so they get one.
+                        {"next_attempt_at": {"$exists": False}},
+                        {"next_attempt_at": {"$lte": now}},
+                    ],
+                },
+            ]
+        },
         {
             "$set": {
                 "status": "running",
@@ -45,19 +74,37 @@ def _claim_task(collections, worker_id: str):
     )
 
 
-def _wait_for_scores(collections, task_id: str, score_date: str, reason: str) -> None:
+def _wait_for_scores(collections, task_id: str, score_date: str, reason: str, universe_index: Optional[str] = None) -> None:
     now = datetime.utcnow()
+    # Stamp the first wait so the deadline can measure how long the task has been
+    # waiting. Set it only when absent so later re-checks do not reset the clock.
+    collections.plan_generation_tasks.update_one(
+        {"task_id": task_id, "waiting_since": {"$exists": False}},
+        {"$set": {"waiting_since": now}},
+    )
     collections.plan_generation_tasks.update_one(
         {"task_id": task_id},
         {
             "$set": {
                 "status": "waiting_for_scores",
                 "waiting_score_date": score_date,
+                # Kept structured so the dashboard can explain the wait in
+                # Chinese without parsing the English error_message.
+                "waiting_universe_index": universe_index,
                 "error_message": reason,
+                "next_attempt_at": now + timedelta(seconds=WAITING_RECHECK_BACKOFF_SECONDS),
                 "updated_at": now,
             }
         },
     )
+
+
+def _waited_seconds(task: dict) -> Optional[float]:
+    """Seconds since the task first entered the waiting state, if known."""
+    since = task.get("waiting_since")
+    if not isinstance(since, datetime):
+        return None
+    return (datetime.utcnow() - since).total_seconds()
 
 
 def _complete_task(collections, task_id: str, plan_id: str) -> None:
@@ -482,7 +529,13 @@ def process_one(collections, worker_id: str, app_db=None, data_db=None):
         )
         if decision == "wait":
             reason = f"scoring is still running for score_date={effective_score_date} universe={universe_index}"
-            _wait_for_scores(collections, task_id, effective_score_date, reason)
+            waited = _waited_seconds(task)
+            if waited is not None and waited > WAITING_MAX_SECONDS:
+                raise TimeoutError(
+                    f"scoring did not complete for score_date={effective_score_date} "
+                    f"universe={universe_index} after {int(waited // 60)} minutes"
+                )
+            _wait_for_scores(collections, task_id, effective_score_date, reason, universe_index)
             _record_worker_status(
                 collections,
                 worker_id,
