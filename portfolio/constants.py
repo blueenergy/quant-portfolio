@@ -26,8 +26,14 @@ GROWTH_CYCLE_PARAMETER_SCHEMA: Dict[str, Dict[str, Any]] = {
     # the portfolio rebalances once this many trading days have elapsed since the
     # previous rebalance. See ``determine_plan_type`` / ``compute_next_rebalance_date``.
     "rebalance_days": {"type": "integer", "min": 1},
-    "construction_mode": {"type": "enum", "options": ["top_n", "industry_capped", "industry_neutral"]},
+    # ``top_n_buffer`` keeps names already held while they remain inside the
+    # hold band, which cuts churn without changing the ranking. See
+    # ``select_trade_plan_portfolio``.
+    "construction_mode": {"type": "enum", "options": ["top_n", "top_n_buffer", "industry_capped", "industry_neutral"]},
     "max_industry_weight": {"type": "number", "min": 0, "max": 1, "nullable": True},
+    # Only read by ``top_n_buffer``: a held name survives while its rank is at
+    # or better than this. Must be >= top_n to mean anything.
+    "holding_buffer_n": {"type": "integer", "min": 1, "nullable": True},
     # CSI1000-only: bull → full book, non-bull → cash. Explicit true on any
     # other universe is rejected. Unset auto-enables for csi1000.
     "regime_cash": {"type": "boolean"},

@@ -24,6 +24,9 @@ PLAN_PARAM_KEYS = {
     "rebalance_days",
     "construction_mode",
     "max_industry_weight",
+    # The hold band changes which names get bought, so it belongs to lineage
+    # identity: two plans with different bands are different strategies.
+    "holding_buffer_n",
     "entry_vol_cap",
 }
 

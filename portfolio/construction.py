@@ -362,7 +362,9 @@ def select_portfolio(df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
     mode = str(config.get("construction_mode") or "top_n")
     valid = df.sort_values("score_value", ascending=False).copy()
     group_column = _industry_group_column(valid)
-    if mode == "top_n" or group_column is None:
+    # ``top_n_buffer`` only changes which held names survive, never which names
+    # qualify: for a candidate-pool slice it is plain ``top_n``.
+    if mode in {"top_n", "top_n_buffer"} or group_column is None:
         return valid.head(top_n).copy()
     if mode == "industry_capped":
         max_weight = float(config.get("max_industry_weight") or 0.3)
@@ -407,12 +409,51 @@ def select_portfolio(df: pd.DataFrame, config: Dict[str, Any]) -> pd.DataFrame:
     raise ValueError(f"Unsupported construction_mode: {mode}")
 
 
+def _buffer_hold_n(config: Dict[str, Any], top_n: int) -> int:
+    """Hold band for ``top_n_buffer``, floored at ``top_n``.
+
+    A band narrower than the book would evict names for being ranked just
+    outside it, which is exactly the churn the buffer exists to stop. Clamping
+    makes ``holding_buffer_n < top_n`` behave as "no buffer" rather than as a
+    stricter rule nobody asked for.
+    """
+    raw = config.get("holding_buffer_n")
+    if raw is None:
+        return top_n
+    try:
+        hold_n = int(raw)
+    except (TypeError, ValueError):
+        return top_n
+    return max(top_n, hold_n)
+
+
+def _order_with_buffer(pool: pd.DataFrame, held: set, hold_n: int) -> pd.DataFrame:
+    """Ranked pool with held names inside the band promoted ahead of new names.
+
+    Order only: eligibility (score cutoff, buyability, exclusions) is unchanged,
+    so a buffered plan buys a subset of what ``top_n`` would consider. The
+    caller truncates to ``top_n`` afterwards, which yields "keep what you hold
+    while it is still ranked, then fill the rest from the top".
+    """
+    if not held or pool.empty:
+        return pool
+    ranked = pool.reset_index(drop=True)
+    in_band = ranked.index < hold_n
+    keep_mask = in_band & ranked["symbol"].astype(str).isin(held)
+    if not keep_mask.any():
+        return pool
+    keep = ranked[keep_mask]
+    rest = ranked[~keep_mask]
+    return pd.concat([keep, rest], ignore_index=True)
+
+
 def select_trade_plan_portfolio(
     df: pd.DataFrame,
     config: Dict[str, Any],
     prices: Dict[str, float],
     target_amount: float,
     excluded_symbols: Optional[Iterable[str]] = None,
+    held_symbols: Optional[Iterable[str]] = None,
 ) -> pd.DataFrame:
     top_n = int(config.get("top_n", 10))
     lot_size = max(1, int(config.get("lot_size", 100)))
@@ -423,6 +464,9 @@ def select_trade_plan_portfolio(
     # Enlarge the candidate pool by the number of exclusions so user rejections
     # can be back-filled by the next-best names without running short of top_n.
     pool = df.sort_values("score_value", ascending=False).head(top_n * pool_multiplier + len(excluded)).reset_index(drop=True)
+    if mode == "top_n_buffer":
+        held = {str(s) for s in (held_symbols or []) if s and str(s) not in excluded}
+        pool = _order_with_buffer(pool, held, _buffer_hold_n(config, top_n))
     rows = []
     selected_symbols = set()
     industry_counts: Dict[str, int] = {}
@@ -475,7 +519,13 @@ def select_trade_plan_portfolio(
             add_row(row, enforce_neutral_quota=False)
             if len(rows) >= top_n:
                 break
-    return pd.DataFrame(rows)
+    selected = pd.DataFrame(rows)
+    if mode == "top_n_buffer" and not selected.empty and "score_value" in selected.columns:
+        # Held names were promoted to the front to be considered first; the
+        # book itself is still reported in rank order so downstream weight and
+        # display code sees one ordering rule for every mode.
+        selected = selected.sort_values("score_value", ascending=False).reset_index(drop=True)
+    return selected
 
 
 def candidate_stats(

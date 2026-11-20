@@ -381,7 +381,19 @@ def generate_trade_plan(
         )
         if blocked_symbols:
             frame = frame[~frame["symbol"].isin(blocked_symbols)].reset_index(drop=True)
-    selected = select_trade_plan_portfolio(frame, config, prices, target_amount, excluded_symbols=excluded).reset_index(drop=True)
+    held_symbols = sorted(
+        symbol
+        for symbol, position in current_positions.items()
+        if int((position or {}).get("shares", 0) or 0) > 0
+    )
+    selected = select_trade_plan_portfolio(
+        frame,
+        config,
+        prices,
+        target_amount,
+        excluded_symbols=excluded,
+        held_symbols=held_symbols,
+    ).reset_index(drop=True)
     selected = apply_regime_cash_to_selection(selected, str(regime_cash.get("action") or "")).reset_index(drop=True)
     lot_size = int(config.get("lot_size", 100))
 
