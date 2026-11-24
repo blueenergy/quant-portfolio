@@ -14,9 +14,15 @@
 # Runs as a quiet background loop from start.portfolio.sh to avoid Supercronic
 # info logs on every empty poll.
 
-# Optional approved paper-trading executor.
-# Runs during the opening window; approved plans remain approved until open prices are available.
-*/2 9-10 * * 1-5 cd /app && python tools/apply_approved_paper_plans.py --execute-date $(date +\%Y\%m\%d)
+# Approved paper-trading executor.
+# Fills at the execute-day OPEN. volume_price only carries that row after the
+# 18:00 daily sync, so an opening-window run (the old `*/2 9-10`) found no open
+# price and fell back to the PREVIOUS close every single day — observed
+# 2026-11-23 (quality_lowrisk_v1) and 2026-11-24 (raw5 40d). That silently gave
+# paper books the overnight gap that live actually pays for.
+# Idempotent: plans already executed are skipped, so the 18:00-19:59 window
+# retries a late data sync without double-filling.
+*/10 18-19 * * 1-5 cd /app && python tools/apply_approved_paper_plans.py --execute-date $(date +\%Y\%m\%d)
 
 # Daily paper-trading mark-to-market after EOD market data sync.
 # Writes a daily equity point even on non-rebalance days.
